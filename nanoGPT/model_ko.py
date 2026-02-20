@@ -11,10 +11,168 @@ GPT (Generative Pre-trained Transformer) 구현
 - Token Embedding: 단어를 벡터로 변환 (각 단어를 고유한 숫자로 표현)
 - Position Embedding: 단어의 위치 정보 추가 (문장에서 순서 정보)
 - Self-Attention: 문장의 각 단어가 다른 단어들과 얼마나 관련 있는지 계산
-- Causal Mask: 미래의 정보를 보지 못하도록阻挡 (왼쪽 방향만 참고)
+- Causal Mask: 미래의 정보를 보지 못하도록 차단 (왼쪽 방향만 참고)
 - Residual Connection: Gradient 소실 방지, 학습 안정성 향상
 - Layer Normalization: 학습 안정화와 수렴 속도 향상
-- MLP (Feed Forward): 비선형 변환으로 표현력增强
+- MLP (Feed Forward): 비선형 변환으로 표현력 강화
+"""
+
+"""
+================================================================================
+                            GPT 아키텍처 다이어그램
+================================================================================
+
+                    입력 토큰 시퀀스
+                          |
+                          v
+        +-----------------------------------------+
+        |         Token Embedding (wte)           |
+        |    "안녕하세요" -> [0.1, -0.3, 0.5...]  |
+        +-----------------------------------------+
+                          |
+                          v
+        +-----------------------------------------+
+        |       Position Embedding (wpe)          |
+        |   위치 0,1,2... -> 위치 벡터 추가       |
+        +-----------------------------------------+
+                          |
+                          v
+                    Embedded Input
+                          |
+                          v
+        +-----------------------------------------+
+        |              Dropout                    |
+        +-----------------------------------------+
+                          |
+         +----------------+----------------+
+         |                                 |
+         v                                 v
+   +---------+                     +---------+
+   | Block 1 |                     | Block 2 |
+   +---------+                     +---------+
+         |                                 |
+         v                                 v
+   +-----------------------------------------+
+   |         Causal Self-Attention           |
+   |  +---------------------------------+    |
+   |  |  Q, K, V 계산 (선형변환)        |    |
+   |  |  어텐션 스코어 = Q x K^T / sqrt(d) |    |
+   |  |  Causal Mask 적용 (미래차단)    |    |
+   |  |  Softmax -> 가중합               |    |
+   |  +---------------------------------+    |
+   +----+------------------------------------+
+        | (Residual Connection)
+        v
+   +---------+
+   | Layer   |
+   | Norm    |
+   +----+----+
+        |
+        v
+   +-----------------------------------------+
+   |              MLP (GELU)                 |
+   |   n_embd -> 4xn_embd -> n_embd         |
+   |   (확장 -> 비선형 -> 축소)              |
+   +----+------------------------------------+
+        | (Residual Connection)
+        v
+                         ...
+                         |
+                         v
+        +-----------------------------------------+
+        |        Final LayerNorm (ln_f)          |
+        +-----------------------------------------+
+                          |
+                          v
+        +-----------------------------------------+
+        |           LM Head (Linear)             |
+        |     n_embd -> vocab_size               |
+        |     (다음 토큰 예측 확률)              |
+        +-----------------------------------------+
+                          |
+                          v
+                     로짓 (logits)
+                          |
+                          v
+                    다음 토큰 예측
+
+================================================================================
+                      Self-Attention 상세 다이어그램
+================================================================================
+
+        입력 X (B, T, n_embd)
+              |
+              v
+    +---------------------+
+    |  Linear (n_embd,   |
+    |      3xn_embd)     |  <- Q, K, V를 한 번에 계산
+    +--------+------------+
+              |
+              v 분할
+        +-----+-----+
+        |           |           |
+        v           v           v
+       Q            K           V
+        |           |           |
+        |    +------+------+    |
+        |    | Attention   |    |
+        |    | Score       |    |
+        |    | Q x K^T    |    |
+        |    +------+------+    |
+        |           |           |
+        |    +------+------+    |
+        |    | Scale       |    |
+        |    | / sqrt(d)  |    |
+        |    +------+------+    |
+        |           |           |
+        |    +------+------+    |
+        |    | Mask         |    |
+        |    | (Causal)    |    |
+        |    +------+------+    |
+        |           |           |
+        |    +------+------+    |
+        |    | Softmax     |    |
+        |    +------+------+    |
+        |           |           |
+        |    +------+------+    |
+        |    | x V         |---+---> 출력 Y
+        |    +-------------+   |
+        |                     |
+        +---------------------+
+
+================================================================================
+                          Block 내부 구조
+================================================================================
+
+         x (입력)
+           |
+           v
+    +--------------+
+    | LayerNorm   |
+    +------+-------+
+           |
+           v
+    +--------------+
+    |  Self-       | ---> Q, K, V 계산
+    |  Attention   | ---> 어텐션 스코어
+    |              | ---> Mask & Softmax
+    +------+-------+
+           |
+           | Residual: x + Attention(x)
+           v
+    +--------------+
+    | LayerNorm   |
+    +------+-------+
+           |
+           v
+    +--------------+
+    |    MLP       | ---> Linear -> GELU -> Linear
+    |  (4배 확장)  |
+    +------+-------+
+           |
+           | Residual: x + MLP(x)
+           v
+         출력 x
 """
 
 import math
@@ -25,20 +183,21 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
+
 class LayerNorm(nn.Module):
     """
     Layer Normalization (층 정규화)
     ========================================
     물리적 의미: 
     - 각 층의 입력값들을 평균 0, 분산 1로 정규화
-    - 학습 중数值 불안정성防止 (gradient exploding/vanishing 문제 해결)
+    - 학습 중 수치 불안정성 방지 (gradient exploding/vanishing 문제 해결)
     - 입력 범위를 일정하게 유지하여 학습 안정화
     
     선택적 bias: PyTorch의 LayerNorm은 bias를 지원하지 않아 직접 구현
     """
     def __init__(self, ndim, bias):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(ndim))  # gamma: 학습 가능한尺度 파라미터
+        self.weight = nn.Parameter(torch.ones(ndim))  # gamma: 학습 가능한 척도 파라미터
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None  # beta: 학습 가능한 이동 파라미터
 
     def forward(self, input):
@@ -47,7 +206,7 @@ class LayerNorm(nn.Module):
 
 class CausalSelfAttention(nn.Module):
     """
-    causal Self-Attention (인과적 자기 어텐션)
+    Causal Self-Attention (인과적 자기 어텐션)
     ========================================
     물리적 의미:
     - 입력 시퀀스의 각 위치가 이전 위치들과 어떤 관계를 갖는지 계산
@@ -58,15 +217,15 @@ class CausalSelfAttention(nn.Module):
     어텐션 계산: Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) * V
     
     causal mask의 의미:
-    - 현재 위치에서 미래 위치(오른쪽)의 정보를 참조하지 않도록遮斷
-    - "나는 어제 것을 볼 수 있지만 오늘은 볼 수 없다"는 時系列 특성 반영
+    - 현재 위치에서 미래 위치(오른쪽)의 정보를 참조하지 않도록 차단
+    - "나는 어제 것을 볼 수 있지만 오늘은 볼 수 없다"는 시계열 특성 반영
     """
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
         
         # Q, K, V를 하나의 선형 변환으로 동시에 계산 (효율성)
-        # 입력: n_embd 차원 → 출력: 3 * n_embd (Q, K, V 각 하나씩)
+        # 입력: n_embd 차원 -> 출력: 3 * n_embd (Q, K, V 각 하나씩)
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
         
         # 어텐션 결과 projection (다시 n_embd 차원으로)
@@ -85,7 +244,7 @@ class CausalSelfAttention(nn.Module):
         if not self.flash:
             print("경고:低速 어텐션 사용中. Flash Attention은 PyTorch 2.0 이상이 필요합니다.")
             
-            # Causal Mask 생성: 삼각형 형태 (미래 정보遮斷)
+            # Causal Mask 생성: 삼각형 형태 (미래 정보 차단)
             # torch.tril: 아래 삼각행렬 (대각선 포함)
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                         .view(1, 1, config.block_size, config.block_size))
@@ -101,7 +260,7 @@ class CausalSelfAttention(nn.Module):
         # Q, K, V 계산: 하나의 선형층에서 세 값으로 분할
         q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
         
-        # 헤드별로 분리: (B, T, n_head, head_dim) → (B, n_head, T, head_dim)
+        # 헤드별로 분리: (B, T, n_head, head_dim) -> (B, n_head, T, head_dim)
         # head_dim = n_embd / n_head: 각 헤드의 차원수
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
@@ -121,7 +280,7 @@ class CausalSelfAttention(nn.Module):
             # 1. Q와 K의 유사도 계산 (스케일링 포함)
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             
-            # 2. Causal Mask 적용 (미래 위치 = -inf → 확률 0)
+            # 2. Causal Mask 적용 (미래 위치 = -inf -> 확률 0)
             att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
             
             # 3. Softmax로 확률 변환
@@ -131,7 +290,7 @@ class CausalSelfAttention(nn.Module):
             # 4. 가중합으로 최종 값 계산
             y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         
-        # 헤드 결과 결합: (B, nh, T, hs) → (B, T, C)
+        # 헤드 결과 결합: (B, nh, T, hs) -> (B, T, C)
         y = y.transpose(1, 2).contiguous().view(B, T, C)
 
         # 출력 projection + dropout
@@ -145,14 +304,14 @@ class MLP(nn.Module):
     ========================================
     물리적 의미:
     - Self-Attention 후 비선형 변환 수행
-    - 4배 확장: 임베딩 차원 → 4배 → 다시 축소
+    - 4배 확장: 임베딩 차원 -> 4배 -> 다시 축소
     - GELU 활성화 함수: ReLU보다 부드러운 비선형성
     
     수식: MLP(x) = GELU(xW_1 + b_1)W_2 + b_2
     """
     def __init__(self, config):
         super().__init__()
-        # 입력 → 4배 확장 (표현력增强)
+        # 입력 -> 4배 확장 (표현력 강화)
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
         
         # GELU 활성화 함수 (Gaussian Error Linear Unit)
@@ -185,7 +344,7 @@ class Block(nn.Module):
     x = x + MLP(LayerNorm(x))        # 잔차 연결
     
     Residual Connection (잔차 연결)의 의미:
-    - Gradient가 직접 흐를 수 있는 경로 제공 (기울기 소실防止)
+    - Gradient가 직접 흐를 수 있는 경로 제공 (기울기 소실 방지)
     - 학습이 깊어져도 정보 손실 최소화
     - 각 층이 입력 정보를 직접 학습할 수 있음
     """
@@ -225,11 +384,11 @@ class GPT(nn.Module):
     GPT 모델 전체 정의
     ========================================
     구조:
-    1. Token Embedding (wte): 토큰 → 임베딩 벡터
-    2. Position Embedding (wpe): 위치 → 임베딩 벡터
+    1. Token Embedding (wte): 토큰 -> 임베딩 벡터
+    2. Position Embedding (wpe): 위치 -> 임베딩 벡터
     3. Transformer Blocks: n_layer개의 블록 통과
     4. LayerNorm: 최종 정규화
-    5. LM Head: 다음 토큰 예측 ( vocabulaire 크기 출력)
+    5. LM Head: 다음 토큰 예측 (vocabulary 크기 출력)
     
     Weight Tying:
     - 입력 임베딩과 출력 임베딩 가중치 공유
@@ -259,7 +418,7 @@ class GPT(nn.Module):
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
         
-        # Language Model Head: 임베딩 → 어휘 크기 변환
+        # Language Model Head: 임베딩 -> 어휘 크기 변환
         # False bias로 Weight Tying 효과 (입력 임베딩과 공유)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         
@@ -321,10 +480,10 @@ class GPT(nn.Module):
         # 위치 정보: 0, 1, 2, ..., t-1
         pos = torch.arange(0, t, dtype=torch.long, device=device)
 
-        # 토큰 임베딩: (B, T) → (B, T, n_embd)
+        # 토큰 임베딩: (B, T) -> (B, T, n_embd)
         tok_emb = self.transformer.wte(idx)
         
-        # 위치 임베딩: (T) → (T, n_embd)
+        # 위치 임베딩: (T) -> (T, n_embd)
         pos_emb = self.transformer.wpe(pos)
         
         # 임베딩 결합 + Dropout
