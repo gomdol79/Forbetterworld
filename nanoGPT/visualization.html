@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPT 내부 동작 시각화 - Learn Step by Step</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            color: #00d9ff;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+        }
+        .input-section {
+            background: #0f3460;
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .input-text {
+            font-size: 1.5em;
+            color: #00d9ff;
+            margin: 10px 0;
+        }
+        .matrix-display {
+            background: #16213e;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            border: 1px solid #0f3460;
+        }
+        .step-title {
+            color: #00d9ff;
+            font-size: 1.4em;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #0f3460;
+        }
+        .matrix-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 30px;
+            justify-content: center;
+            margin: 20px 0;
+        }
+        .matrix {
+            background: #0f3460;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .matrix-label {
+            color: #888;
+            margin-bottom: 10px;
+            font-size: 0.9em;
+        }
+        .matrix-values {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            line-height: 1.6;
+        }
+        .matrix-values .row {
+            display: block;
+        }
+        .matrix-values .value {
+            display: inline-block;
+            width: 70px;
+            text-align: right;
+            color: #00ff88;
+        }
+        .arrow {
+            font-size: 2em;
+            color: #00d9ff;
+            align-self: center;
+        }
+        .highlight {
+            color: #ff6b6b;
+            font-weight: bold;
+        }
+        .explanation {
+            background: #0f3460;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            border-left: 4px solid #00d9ff;
+        }
+        .explanation-title {
+            color: #00d9ff;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        .dimension-info {
+            background: #1a1a2e;
+            padding: 8px 15px;
+            border-radius: 20px;
+            display: inline-block;
+            margin-bottom: 15px;
+            font-size: 0.9em;
+            color: #00ff88;
+        }
+        .color-legend {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 5px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #0f3460;
+            border-radius: 2px;
+            margin-bottom: 30px;
+        }
+        .progress {
+            height: 100%;
+            background: linear-gradient(90deg, #00d9ff, #00ff88);
+            border-radius: 2px;
+            transition: width 0.5s;
+        }
+        .nav-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin: 30px 0;
+        }
+        .nav-btn {
+            background: #0f3460;
+            color: #00d9ff;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: all 0.3s;
+        }
+        .nav-btn:hover {
+            background: #00d9ff;
+            color: #1a1a2e;
+        }
+        .nav-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .step-counter {
+            text-align: center;
+            color: #888;
+            margin-bottom: 20px;
+        }
+        code {
+            background: #0f3460;
+            padding: 2px 8px;
+            border-radius: 4px;
+            color: #00ff88;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧠 GPT 내부 동작 시각화</h1>
+        <p class="subtitle">각 단계별로 행렬이 어떻게 변하는지 확인해보세요!</p>
+
+        <div class="progress-bar">
+            <div class="progress" id="progress" style="width: 12.5%"></div>
+        </div>
+
+        <div class="step-counter">
+            <span id="stepCounter">1</span> / 8 단계
+        </div>
+
+        <div class="input-section">
+            <h3>📝 입력 문장</h3>
+            <p class="input-text">"안녕"</p>
+            <p>→ 문자 2개, 토큰으로 변환: [100, 200]</p>
+        </div>
+
+        <!-- Step 1: Token Embedding -->
+        <div class="matrix-display" id="step1">
+            <h2 class="step-title">📥 Step 1: Token Embedding (토큰 임베딩)</h2>
+            <div class="dimension-info">입력: (2,) → 출력: (2, 4)</div>
+            
+            <div class="explanation">
+                <div class="explanation-title">💡 설명</div>
+                각 토큰을 고유한 벡터(숫자 배열)로 변환합니다.<br>
+                <code>안녕</code> → <code>[0.1, -0.3, 0.5, 0.2]</code><br>
+                여기서는 이해를 위해 4차원 벡터를 사용합니다 (실제 GPT는 768차원).
+            </div>
+
+            <div class="matrix-container">
+                <div class="matrix">
+                    <div class="matrix-label">입력 토큰 인덱스</div>
+                    <div class="matrix-values">
+                        <span class="row">[100]  →  "안"</span><br>
+                        <span class="row">[200]  →  "녕"</span>
+                    </div>
+                </div>
+                <div class="arrow">→</div>
+                <div class="matrix">
+                    <div class="matrix-label">Token Embedding 행렬 (2×4)</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.1</span><span class="value">-0.3</span><span class="value">0.5</span><span class="value">0.2</span></span><br>
+                        <span class="row"><span class="value">0.3</span><span class="value">0.1</span><span class="value">-0.4</span><span class="value">0.6</span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2: Position Embedding -->
+        <div class="matrix-display" id="step2" style="display:none">
+            <h2 class="step-title">📍 Step 2: Position Embedding (위치 임베딩)</h2>
+            <div class="dimension-info">입력: (2,) → 출력: (2, 4)</div>
+            
+            <div class="explanation">
+                <div class="explanation-title">💡 설명</div>
+                시퀀스에서 각 단어의 <span class="highlight">위치 정보</span>를 추가합니다.<br>
+                위치 0(안)에는 <code>[0.0, 0.1, 0.2, 0.3]</code><br>
+                위치 1(녕)에는 <code>[0.1, 0.2, 0.3, 0.4]</code>
+            </div>
+
+            <div class="matrix-container">
+                <div class="matrix">
+                    <div class="matrix-label">위치 인덱스</div>
+                    <div class="matrix-values">
+                        <span class="row">[0]  →  위치 0</span><br>
+                        <span class="row">[1]  →  위치 1</span>
+                    </div>
+                </div>
+                <div class="arrow">→</div>
+                <div class="matrix">
+                    <div class="matrix-label">Position Embedding 행렬 (2×4)</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.0</span><span class="value">0.1</span><span class="value">0.2</span><span class="value">0.3</span></span><br>
+                        <span class="row"><span class="value">0.1</span><span class="value">0.2</span><span class="value">0.3</span><span class="value">0.4</span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Embedding Addition -->
+        <div class="matrix-display" id="step3" style="display:none">
+            <h2 class="step-title">➕ Step 3: Embedding 더하기</h2>
+            <div class="dimension-info">입력: (2, 4) + (2, 4) → 출력: (2, 4)</div>
+            
+            <div class="explanation">
+                <div class="explanation-title">💡 설명</div>
+                Token Embedding과 Position Embed딩을 <span class="highlight">element-wise</span>로 더합니다.<br>
+                각 위치의 최종 입력 벡터 = 토큰 정보 + 위치 정보
+            </div>
+
+            <div class="matrix-container">
+                <div class="matrix">
+                    <div class="matrix-label">Token Embedding</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.1</span><span class="value">-0.3</span><span class="value">0.5</span><span class="value">0.2</span></span><br>
+                        <span class="row"><span class="value">0.3</span><span class="value">0.1</span><span class="value">-0.4</span><span class="value">0.6</span></span>
+                    </div>
+                </div>
+                <div class="arrow">+</div>
+                <div class="matrix">
+                    <div class="matrix-label">Position Embedding</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.0</span><span class="value">0.1</span><span class="value">0.2</span><span class="value">0.3</span></span><br>
+                        <span class="row"><span class="value">0.1</span><span class="value">0.2</span><span class="value">0.3</span><span class="value">0.4</span></span>
+                    </div>
+                </div>
+                <div class="arrow">=</div>
+                <div class="matrix">
+                    <div class="matrix-label">최종 입력 (2×4)</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value highlight">0.1</span><span class="value highlight">-0.2</span><span class="value highlight">0.7</span><span class="value highlight">0.5</span></span><br>
+                        <span class="row"><span class="value highlight">0.4</span><span class="value highlight">0.3</span><span class="value highlight">-0.1</span><span class="value highlight">1.0</span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 4: Q, K, V Calculation -->
+        <div class="matrix-display" id="step4" style="display:none">
+            <h2 class="step-title">🔑 Step 4: Q, K, V 계산 (Self-Attention 전)</h2>
+            <div class="dimension-info">입력: (2, 4) → 출력: Q(2,4), K(2,4), V(2,4)</div>
+            
+            <div class="explanation">
+                <div class="explanation-title">💡 설명</div>
+                입력 벡터에 <span class="highlight">선형 변환</span>을 적용하여 Q, K, V를 만듭니다.<br>
+                - <strong>Q (Query)</strong>: "나는 어떤 정보를 찾고 있어?"<br>
+                - <strong>K (Key)</strong>: "나는 어떤 정보를 가지고 있어?"<br>
+                - <strong>V (Value)</strong>: "실제 전달할 정보"
+            </div>
+
+            <div class="matrix-container">
+                <div class="matrix">
+                    <div class="matrix-label">입력 X</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.1</span><span class="value">-0.2</span><span class="value">0.7</span><span class="value">0.5</span></span><br>
+                        <span class="row"><span class="value">0.4</span><span class="value">0.3</span><span class="value">-0.1</span><span class="value">1.0</span></span>
+                    </div>
+                </div>
+                <div class="arrow">×</div>
+                <div class="matrix">
+                    <div class="matrix-label">가중치 W</div>
+                    <div class="matrix-values">
+                        <span class="row">(4×4 행렬)</span>
+                    </div>
+                </div>
+                <div class="arrow">=</div>
+                <div class="matrix">
+                    <div class="matrix-label">Q, K, V</div>
+                    <div class="matrix-values">
+                        <span class="row">각 2×4 행렬</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="matrix-container">
+                <div class="matrix">
+                    <div class="matrix-label">Q (Query)</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.3</span><span class="value">-0.1</span><span class="value">0.5</span><span class="value">0.2</span></span><br>
+                        <span class="row"><span class="value">0.6</span><span class="value">0.4</span><span class="value">0.1</span><span class="value">0.8</span></span>
+                    </div>
+                </div>
+                <div class="matrix">
+                    <div class="matrix-label">K (Key)</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.2</span><span class="value">0.1</span><span class="value">0.3</span><span class="value">0.1</span></span><br>
+                        <span class="row"><span class="value">0.5</span><span class="value">0.3</span><span class="value">0.2</span><span class="value">0.7</span></span>
+                    </div>
+                </div>
+                <div class="matrix">
+                    <div class="matrix-label">V (Value)</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.4</span><span class="value">0.2</span><span class="value">0.6</span><span class="value">0.3</span></span><br>
+                        <span class="row"><span class="value">0.7</span><span class="value">0.5</span><span class="value">0.4</span><span class="value">0.9</span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 5: Attention Score -->
+        <div class="matrix-display" id="step5" style="display:none">
+            <h2 class="step-title">🎯 Step 5: Attention Score 계산</h2>
+            <div class="dimension-info">Q·K^T → (2, 2) 행렬</div>
+            
+            <div class="explanation">
+                <div class="explanation-title">💡 설명</div>
+                Q와 K^T를 행렬 곱해서 <span class="highlight">어텐션 점수</span>를 계산합니다.<br>
+                이 점수는 "각 단어가 다른 단어와 얼마나 관련이 있는지"를 나타냅니다.<br>
+                √d로 나누어 스케일링 (gradient exploding 방지)
+            </div>
+
+            <div class="matrix-container">
+                <div class="matrix">
+                    <div class="matrix-label">Q (2×2简化)</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.3</span><span class="value">0.2</span></span><br>
+                        <span class="row"><span class="value">0.6</span><span class="value">0.5</span></span>
+                    </div>
+                </div>
+                <div class="arrow">×</div>
+                <div class="matrix">
+                    <div class="matrix-label">K^T (2×2简化)</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.2</span><span class="value">0.5</span></span><br>
+                        <span class="row"><span class="value">0.1</span><span class="value">0.3</span></span>
+                    </div>
+                </div>
+                <div class="arrow">=</div>
+                <div class="matrix">
+                    <div class="matrix-label">Q·K^T (2×2)</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value highlight">0.08</span><span class="value highlight">0.21</span></span><br>
+                        <span class="row"><span class="value highlight">0.17</span><span class="value highlight">0.45</span></span>
+                    </div>
+                </div>
+                <div class="arrow">÷</div>
+                <div class="matrix">
+                    <div class="matrix-label">√d = 2</div>
+                    <div class="matrix-values">
+                        <span class="row">스케일링</span>
+                    </div>
+                </div>
+                <div class="arrow">=</div>
+                <div class="matrix">
+                    <div class="matrix-label">스케일링 후</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.04</span><span class="value">0.11</span></span><br>
+                        <span class="row"><span class="value">0.09</span><span class="value">0.23</span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 6: Causal Mask -->
+        <div class="matrix-display" id="step6" style="display:none">
+            <h2 class="step-title">🚫 Step 6: Causal Mask 적용 (미래 정보 차단)</h2>
+            <div class="dimension-info">어텐션 점수 (2, 2) → 마스킹 적용</div>
+            
+            <div class="explanation">
+                <div class="explanation-title">💡 설명</div>
+                <span class="highlight">미래의 정보를 볼 수 없도록</span> 마스킹합니다.<br>
+                "안녕"을 생성할 때, "녕" 이후의 정보는 참조하면 안 됩니다.<br>
+                대각선 위쪽을 -∞로 설정하여 Softmax 후 확률을 0으로 만듭니다.
+            </div>
+
+            <div class="matrix-container">
+                <div class="matrix">
+                    <div class="matrix-label">마스킹 전 어텐션</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.04</span><span class="value">0.11</span></span><br>
+                        <span class="row"><span class="value">0.09</span><span class="value">0.23</span></span>
+                    </div>
+                </div>
+                <div class="arrow">+</div>
+                <div class="matrix">
+                    <div class="matrix-label">Causal Mask</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0</span><span class="value">-∞</span></span><br>
+                        <span class="row"><span class="value">0</span><span class="value">0</span></span>
+                    </div>
+                </div>
+                <div class="arrow">=</div>
+                <div class="matrix">
+                    <div class="matrix-label">마스킹 후</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value highlight">0.04</span><span class="value highlight">-∞</span></span><br>
+                        <span class="row"><span class="value highlight">0.09</span><span class="value highlight">0.23</span></span>
+                    </div>
+                </div>
+            </div>
+            <p style="text-align:center; color:#888; margin-top:10px;">
+                ↑ 두 번째 행 첫 번째 열이 -∞가 아닌 이유: "녕"은 "안"을 참고할 수 있음
+            </p>
+        </div>
+
+        <!-- Step 7: Softmax & Attention Output -->
+        <div class="matrix-display" id="step7" style="display:none">
+            <h2 class="step-title">📊 Step 7: Softmax & Attention 가중합</h2>
+            <div class="dimension-info">마스킹된 점수 → Softmax → V와 곱셈</div>
+            
+            <div class="explanation">
+                <div class="explanation-title">💡 설명</div>
+                1. <strong>Softmax</strong>: 점수를 확률로 변환 (합 = 1)<br>
+                2. <strong>가중합</strong>: 각 V 값에 확률을 곱해서 더함<br>
+                결과: 각 위치의 "문맥을 반영한" 새로운 표현
+            </div>
+
+            <div class="matrix-container">
+                <div class="matrix">
+                    <div class="matrix-label">마스킹된 점수</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.04</span><span class="value">-∞</span></span><br>
+                        <span class="row"><span class="value">0.09</span><span class="value">0.23</span></span>
+                    </div>
+                </div>
+                <div class="arrow">Softmax</div>
+                <div class="matrix">
+                    <div class="matrix-label">확률 (Softmax)</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value highlight">1.00</span><span class="value highlight">0.00</span></span><br>
+                        <span class="row"><span class="value highlight">0.46</span><span class="value highlight">0.54</span></span>
+                    </div>
+                </div>
+                <div class="arrow">×</div>
+                <div class="matrix">
+                    <div class="matrix-label">V 행렬</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.4</span><span class="value">0.2</span></span><br>
+                        <span class="row"><span class="value">0.7</span><span class="value">0.5</span></span>
+                    </div>
+                </div>
+                <div class="arrow">=</div>
+                <div class="matrix">
+                    <div class="matrix-label">Attention 출력</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value highlight">0.40</span><span class="value highlight">0.20</span></span><br>
+                        <span class="row"><span class="value highlight">0.54</span><span class="value highlight">0.36</span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 8: Final Output -->
+        <div class="matrix-display" id="step8" style="display:none">
+            <h2 class="step-title">🏁 Step 8: 다음 토큰 예측</h2>
+            <div class="dimension-info">Attention 출력 → LM Head → Softmax → 다음 토큰</div>
+            
+            <div class="explanation">
+                <div class="explanation-title">💡 설명</div>
+                1. Attention 출력을 <span class="highlight">LM Head</span>(선형층)를 통해 어휘 크기로 변환<br>
+                2. Softmax를 적용하여 확률 분포로 변환<br>
+                3. 가장 높은 확률을 가진 토큰이 <span class="highlight">다음 토큰</span>으로 예측됨
+            </div>
+
+            <div class="matrix-container">
+                <div class="matrix">
+                    <div class="matrix-label">Attention 출력 (2×4)</div>
+                    <div class="matrix-values">
+                        <span class="row"><span class="value">0.40</span><span class="value">0.20</span><span class="value">...</span><span class="value">...</span></span><br>
+                        <span class="row"><span class="value">0.54</span><span class="value">0.36</span><span class="value">...</span><span class="value">...</span></span>
+                    </div>
+                </div>
+                <div class="arrow">×</div>
+                <div class="matrix">
+                    <div class="matrix-label">LM Head</div>
+                    <div class="matrix-values">
+                        <span class="row">(4 × 50000)</span><br>
+                        <span class="row">어휘 크기</span>
+                    </div>
+                </div>
+                <div class="arrow">=</div>
+                <div class="matrix">
+                    <div class="matrix-label">로짓 (2×50000)</div>
+                    <div class="matrix-values">
+                        <span class="row">각 토큰별 점수</span>
+                    </div>
+                </div>
+                <div class="arrow">Softmax</div>
+                <div class="matrix">
+                    <div class="matrix-label">확률 분포</div>
+                    <div class="matrix-values">
+                        <span class="row">다음 토큰 예측</span>
+                    </div>
+                </div>
+            </div>
+
+            <div style="background:#0f3460; padding:20px; border-radius:10px; text-align:center; margin-top:20px;">
+                <h3 style="color:#00d9ff; margin-bottom:15px;">🎯 예측 결과</h3>
+                <p style="font-size:1.2em;">
+                    입력: <span style="color:#00ff88">"안녕"</span> 
+                    → 
+                    다음 토큰 예측: <span style="color:#ff6b6b; font-size:1.5em;">"하세요"</span>
+                </p>
+                <p style="color:#888; margin-top:10px;">
+                    (확률 분포에서 가장 높은 확률을 가진 토큰)
+                </p>
+            </div>
+        </div>
+
+        <div class="nav-buttons">
+            <button class="nav-btn" id="prevBtn" onclick="changeStep(-1)" disabled>◀ 이전</button>
+            <button class="nav-btn" id="nextBtn" onclick="changeStep(1)">다음 ▶</button>
+        </div>
+
+        <div class="color-legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background:#00ff88"></div>
+                <span>양수 값</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background:#ff6b6b"></div>
+                <span>중요/변경 사항</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background:#00d9ff"></div>
+                <span>연산/변환</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentStep = 1;
+        const totalSteps = 8;
+
+        function changeStep(delta) {
+            document.getElementById('step' + currentStep).style.display = 'none';
+            
+            currentStep += delta;
+            
+            if (currentStep < 1) currentStep = 1;
+            if (currentStep > totalSteps) currentStep = totalSteps;
+            
+            document.getElementById('step' + currentStep).style.display = 'block';
+            document.getElementById('stepCounter').textContent = currentStep;
+            document.getElementById('progress').style.width = (currentStep / totalSteps * 100) + '%';
+            
+            document.getElementById('prevBtn').disabled = currentStep === 1;
+            document.getElementById('nextBtn').disabled = currentStep === totalSteps;
+        }
+
+        // Initialize
+        changeStep(0);
+    </script>
+</body>
+</html>
